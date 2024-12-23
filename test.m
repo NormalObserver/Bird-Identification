@@ -6,10 +6,12 @@ iouT = 0.5;   % 交并比阈值
 % classes = load_classes('./birds.yaml'); 
 % disp(classes);
 
-[classes,output_img] = predict_with_onnx(onnx_model_name, img_path, confT, iouT);
+[classes,classesId] = predict_with_onnx(onnx_model_name, img_path, confT, iouT);
+
+disp(classes{classesId});
 
 
-function [classes, output_img] = predict_with_onnx(onnx_model_name, img_path, confT, iouT)
+function [classes, classesId] = predict_with_onnx(onnx_model_name, img_path, confT, iouT)
     onnxruntime = py.importlib.import_module('onnxruntime');
     session = onnxruntime.InferenceSession(onnx_model_name); 
 
@@ -30,10 +32,7 @@ function [classes, output_img] = predict_with_onnx(onnx_model_name, img_path, co
 
     outputs = session.run(py.None, inputs_dict);  % 执行推理
 
-    disp(outputs);
-    % 后处理
-    output_img = postprocess_image(img, outputs, classes, confT, iouT);
-    output_img = 1;
+    classesId = get_class_ids(outputs, confT);
 end
 
 function classes = load_classes(yaml_file)
@@ -70,34 +69,120 @@ function img_data = preprocess_image(img)
 end
 
 
+function targetId = get_class_ids(outputs, confT)
 
+    output = outputs{1};  % output 是一个 numpy.ndarray（Python 类型）
+    disp(class(output));
+    output = py.numpy.squeeze(output);  % 移除单维度
+    output_trans = py.numpy.transpose(output);
 
-
-
-
-function output_img = postprocess_image(img, outputs, classes, confT, iouT)
-%     outputs = outputs{1};
-   
-    boxes = outputs{1};   % 假设模型返回的是边界框信息
-    scores = outputs{2};  % 假设模型返回的是得分信息
-    class_ids = outputs{3};  % 假设模型返回的是类别 ID 信息
+    output_list = output_trans.tolist();  % 使用 .tolist() 将其转换为 Python list
     
-    % 遍历所有检测到的框
-    for i = 1:size(boxes, 1)
-        if scores(i) > confT  % 如果得分超过阈值
-            % 获取边界框坐标
-            box = boxes(i, :);
-            class_id = class_ids(i);
-            score = scores(i);
-            
-            % 绘制边界框
-            img = insertShape(img, 'Rectangle', box, 'Color', 'green', 'LineWidth', 3);
-            % 添加标签
-            label = sprintf('%s: %.2f', classes{class_id}, score);
-            img = insertText(img, box(1:2), label, 'BoxColor', 'yellow', 'TextColor', 'black');
+    % 获取输出的行数（即检测框的数量）
+    num_boxes = double(py.len(output_list));  % 获取输出的行数，即检测框的数量
+
+    class_ids = [];
+    scores = [];
+    
+    % 遍历所有检测框
+    for i = 1:num_boxes
+        % 使用 MATLAB 的圆括号访问 Python list 中的第 i 行
+        row = double(py.array.array('d', output_list{i}));  % 将每一行转换为 MATLAB 数组
+
+        % 提取从第 5 列到末尾的得分部分
+        scores_row  = row(5:end);  % 取出从第 5 列开始的得分
+
+        
+        [max_score, class_id] = max(scores_row);  % 找到最大得分及对应的类别 ID（MATLAB 中的索引从 1 开始）
+
+        % 判断最大得分是否大于或等于置信度阈值
+        if max_score >= confT
+            % 由于 MATLAB 中的索引从 1 开始，Python 的索引从 0 开始，所以需要减去 1
+            class_ids = [class_ids; class_id - 1];  % 保存类别 ID
+            scores = [scores; max_score];  % 保存得分
         end
     end
-    
-    output_img = img;
+
+%     disp(class_ids);
+    targetId = mode(class_ids);
+     if isempty(targetId)
+        targetId = NaN;  % 返回 -1 表示没有有效的类别 ID
+     end
+%      disp(targetId);
 end
+
+
+
+
+
+
+% function class_ids = get_class_ids(outputs, confT)
+% %     disp(outputs);
+%     output = outputs{1}; 
+%     output = double(output);  
+%     disp(class(outputs));
+%     disp(class(outputs{1}));
+%     disp(class(output));
+% %     disp(output);
+%     output = squeeze(output);  % 去除单一维度
+%     
+%     % 确保输出是 [8400, 204] 的形状，如果不是的话进行转置
+%     % 假设原始输出的形状为 [1, 8400, 204]
+%     if size(output, 1) == 1
+%         output = permute(output, [2,3, 1]);  % 转置为 [8400, 204]
+%     end
+%     
+%     % 获取输出数组的行数（即检测框的数量）
+%     rows = size(output, 1);  % 输出的行数即为检测框数量
+%     disp(size(output));
+%     disp(rows);
+%     % 存储类别 ID 的数组
+%     class_ids = [];
+% 
+%     % 遍历每个检测框
+%     for i = 1:rows
+%         % 提取当前检测框的类别得分
+%         classes_scores = outputs(i, 5:end);  % 从索引 5 开始是类别的得分
+%         [max_score, class_id] = max(classes_scores);  % 找到最大得分及其对应的类别 ID
+% 
+%         % 如果最大得分大于或等于置信度阈值
+%         if max_score >= confT
+%             % 存储该类别 ID
+%             class_ids = [class_ids, class_id];
+%         end
+%     end
+%     disp(class_ids);
+% end
+
+
+
+
+
+
+
+% function output_img = postprocess_image(img, outputs, classes, confT, iouT)
+% %     outputs = outputs{1};
+%    
+%     boxes = outputs{1};   % 假设模型返回的是边界框信息
+%     scores = outputs{2};  % 假设模型返回的是得分信息
+%     class_ids = outputs{3};  % 假设模型返回的是类别 ID 信息
+%     
+%     % 遍历所有检测到的框
+%     for i = 1:size(boxes, 1)
+%         if scores(i) > confT  % 如果得分超过阈值
+%             % 获取边界框坐标
+%             box = boxes(i, :);
+%             class_id = class_ids(i);
+%             score = scores(i);
+%             
+%             % 绘制边界框
+%             img = insertShape(img, 'Rectangle', box, 'Color', 'green', 'LineWidth', 3);
+%             % 添加标签
+%             label = sprintf('%s: %.2f', classes{class_id}, score);
+%             img = insertText(img, box(1:2), label, 'BoxColor', 'yellow', 'TextColor', 'black');
+%         end
+%     end
+%     
+%     output_img = img;
+% end
 
